@@ -1,0 +1,1060 @@
+# This workflow will upload a Python Package to PyPI when a release is created
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python#publishing-to-package-registries
+
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+{
+  "cells": [
+    {
+      "cell_type": "code",
+      "execution_count": 1,
+      "metadata": {
+        "id": "eggCP5L__IhW"
+      },
+      "outputs": [],
+      "source": [
+        "#################################\n",
+        "# 1. IMPORTS & CONFIG\n",
+        "#################################\n",
+        "import os\n",
+        "import gc\n",
+        "import cv2\n",
+        "import torch\n",
+        "import random\n",
+        "import numpy as np\n",
+        "import pandas as pd\n",
+        "\n",
+        "from glob import glob\n",
+        "from torch import nn\n",
+        "from tqdm import tqdm\n",
+        "from sklearn.model_selection import KFold\n",
+        "from torch.utils.data import Dataset, DataLoader\n",
+        "\n",
+        "import torchvision\n",
+        "import torchvision.transforms as T\n",
+        "\n",
+        "from google.colab import drive\n",
+        "from sklearn.metrics import f1_score\n",
+        "\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": 2,
+      "metadata": {
+        "id": "l1E5NTqXJ85G"
+      },
+      "outputs": [],
+      "source": [
+        "#################################\n",
+        "# 2. BASIC SETTINGS\n",
+        "#################################\n",
+        "class CFG:\n",
+        "    seed = 42\n",
+        "    n_splits = 2       # Basic K-Fold\n",
+        "    epochs = 5\n",
+        "    train_bs = 32\n",
+        "    valid_bs = 23\n",
+        "    lr = 1e-3\n",
+        "    num_workers = 2\n",
+        "    img_size = 224\n",
+        "    device = \"cuda\" if torch.cuda.is_available() else \"cpu\"\n",
+        "\n",
+        "def set_seed(seed=42):\n",
+        "    random.seed(seed)\n",
+        "    np.random.seed(seed)\n",
+        "    torch.manual_seed(seed)\n",
+        "    if torch.cuda.is_available():\n",
+        "        torch.cuda.manual_seed_all(seed)\n",
+        "\n",
+        "set_seed(CFG.seed)"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": 3,
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "7Cu5kjVxJ_OW",
+        "outputId": "ed1041ff-57aa-4691-976b-ed69b11be08e"
+      },
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Train Shape: (432, 2)\n",
+            "Test  Shape: (126, 1)\n",
+            "                                                path label\n",
+            "0  /content/drive/MyDrive/open-data-day-2025-date...  Ajwa\n",
+            "1  /content/drive/MyDrive/open-data-day-2025-date...  Ajwa\n",
+            "2  /content/drive/MyDrive/open-data-day-2025-date...  Ajwa\n",
+            "3  /content/drive/MyDrive/open-data-day-2025-date...  Ajwa\n",
+            "4  /content/drive/MyDrive/open-data-day-2025-date...  Ajwa\n"
+          ]
+        }
+      ],
+      "source": [
+        "#################################\n",
+        "# 3. LOAD DATA\n",
+        "#################################\n",
+        "train_df = pd.read_csv(\"/content/drive/MyDrive/open-data-day-2025-dates-types-classification/train_labels.csv\")\n",
+        "train_df[\"path\"] = \"/content/drive/MyDrive/open-data-day-2025-dates-types-classification/train/\" + train_df[\"filename\"]\n",
+        "train_df.drop(\"filename\", axis=1, inplace=True)\n",
+        "train_df = train_df[[\"path\",\"label\"]]\n",
+        "\n",
+        "test_paths = glob(\"/content/drive/MyDrive/open-data-day-2025-dates-types-classification/test/*\")\n",
+        "test_df = pd.DataFrame({\"path\": test_paths})\n",
+        "\n",
+        "print(\"Train Shape:\", train_df.shape)\n",
+        "print(\"Test  Shape:\", test_df.shape)\n",
+        "print(train_df.head())\n",
+        "\n",
+        "# Map string labels to integer indices\n",
+        "label_mapping = {\n",
+        "    \"Ajwa\":        0,\n",
+        "    \"Medjool\":     1,\n",
+        "    \"Meneifi\":     2,\n",
+        "    \"Nabtat Ali\":  3,\n",
+        "    \"Shaishe\":     4,\n",
+        "    \"Sokari\":      5,\n",
+        "    \"Sugaey\":      6\n",
+        "}\n",
+        "train_df[\"label_idx\"] = train_df[\"label\"].map(label_mapping)"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": 4,
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "rsyv36o2LOwN",
+        "outputId": "dbcb36b6-fda2-4c64-957f-e703ad0174a0"
+      },
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "fold\n",
+            "0    216\n",
+            "1    216\n",
+            "dtype: int64\n"
+          ]
+        }
+      ],
+      "source": [
+        "train_df[\"fold\"] = -1\n",
+        "kf = KFold(n_splits=CFG.n_splits, shuffle=True, random_state=CFG.seed)\n",
+        "\n",
+        "for fold_number, (tr_idx, val_idx) in enumerate(kf.split(train_df)):\n",
+        "    train_df.loc[val_idx, \"fold\"] = fold_number\n",
+        "\n",
+        "print(train_df.groupby(\"fold\").size())"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": 5,
+      "metadata": {
+        "id": "MT1H_nhhLZZ-"
+      },
+      "outputs": [],
+      "source": [
+        "#################################\n",
+        "# 5. DATASET & TRANSFORMS\n",
+        "#################################\n",
+        "train_transform = T.Compose([\n",
+        "    T.ToPILImage(),\n",
+        "    T.RandomResizedCrop(CFG.img_size, scale=(0.8, 1.0)),\n",
+        "    T.RandomHorizontalFlip(),\n",
+        "    T.RandomRotation(15),\n",
+        "    T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),\n",
+        "    T.RandomAffine(degrees=10, shear=5),\n",
+        "    T.ToTensor(),\n",
+        "    T.Normalize([0.5], [0.5])\n",
+        "])\n",
+        "\n",
+        "valid_transform = T.Compose([\n",
+        "    T.ToPILImage(),\n",
+        "    T.Resize((CFG.img_size, CFG.img_size)),\n",
+        "    T.ToTensor(),\n",
+        "    T.Normalize([0.5], [0.5])\n",
+        "])\n",
+        "\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": 6,
+      "metadata": {
+        "id": "iCRBAhjELb_B"
+      },
+      "outputs": [],
+      "source": [
+        "#################################\n",
+        "# Old Dataset class\n",
+        "#################################\n",
+        "class DatesDataset(Dataset):\n",
+        "    def __init__(self, df, mode=\"train\", transforms=None):\n",
+        "        self.df = df.reset_index(drop=True)\n",
+        "        self.mode = mode\n",
+        "        self.transforms = transforms\n",
+        "\n",
+        "    def __len__(self):\n",
+        "        return len(self.df)\n",
+        "\n",
+        "    def __getitem__(self, idx):\n",
+        "        row = self.df.loc[idx]\n",
+        "        image_path = row[\"path\"]\n",
+        "        label_idx = row[\"label_idx\"] if \"label_idx\" in row else None\n",
+        "\n",
+        "        # Read image (BGR), then convert to RGB\n",
+        "        image = cv2.imread(image_path)\n",
+        "        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)\n",
+        "\n",
+        "        # Apply transforms\n",
+        "        if self.transforms:\n",
+        "            image = self.transforms(image)\n",
+        "\n",
+        "        if self.mode != \"test\":\n",
+        "            return image, label_idx\n",
+        "        else:\n",
+        "            return image"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": 7,
+      "metadata": {
+        "id": "9DkDyRc6P921"
+      },
+      "outputs": [],
+      "source": [
+        "class DatesDataset(Dataset):\n",
+        "    def __init__(self, df, mode=\"train\", transforms=None):\n",
+        "        self.df = df.reset_index(drop=True)\n",
+        "        self.mode = mode\n",
+        "        self.transforms = transforms\n",
+        "\n",
+        "    def __len__(self):\n",
+        "        return len(self.df)\n",
+        "\n",
+        "    def __getitem__(self, idx):\n",
+        "        row = self.df.loc[idx]\n",
+        "        image_path = row[\"path\"]\n",
+        "        label_idx = row[\"label_idx\"] if \"label_idx\" in row else None\n",
+        "\n",
+        "        # Read the image (BGR format) using OpenCV\n",
+        "        image = cv2.imread(image_path)\n",
+        "\n",
+        "        # ✅ Check if the image is None (File Missing or Corrupt)\n",
+        "        if image is None:\n",
+        "            print(f\"⚠️ Warning: Failed to load image at {image_path}\")\n",
+        "            # Return a blank image or handle the error gracefully\n",
+        "            image = np.zeros((224, 224, 3), dtype=np.uint8)  # Black image placeholder\n",
+        "\n",
+        "        # Convert BGR to RGB\n",
+        "        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)\n",
+        "\n",
+        "        # Apply transforms (if any)\n",
+        "        if self.transforms:\n",
+        "            image = self.transforms(image)\n",
+        "\n",
+        "        if self.mode == \"test\":\n",
+        "            return image\n",
+        "        else:\n",
+        "            return image, label_idx"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "BuviaP1rxJjA"
+      },
+      "source": [
+        "\n",
+        "\n",
+        "#################################\n",
+        "# 6. MODEL DEFINITION (EffNet-B0)\n",
+        "#################################\n",
+        "# We'll modify the final layer for the number of classes we have (7).\n",
+        "def get_model(num_classes=7, pretrained=True):\n",
+        "    model = torchvision.models.efficientnet_b0(pretrained=pretrained)\n",
+        "    model.classifier[1] = nn.Linear(1280, num_classes)\n",
+        "    return model"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": 7,
+      "metadata": {
+        "id": "dIR7gvwILd7d"
+      },
+      "outputs": [],
+      "source": []
+    },
+    {
+      "cell_type": "code",
+      "execution_count": 8,
+      "metadata": {
+        "id": "7z0D1s430svP"
+      },
+      "outputs": [],
+      "source": [
+        "#################################\n",
+        "# efficientnet_b0\n",
+        "#################################\n",
+        "class DateClassifier(nn.Module):\n",
+        "    def __init__(self, num_classes=7 , pretrained=True):\n",
+        "        super(DateClassifier, self).__init__()\n",
+        "        self.model = torchvision.models.efficientnet_b0(pretrained=pretrained)\n",
+        "        self.model.classifier = nn.Sequential(\n",
+        "            nn.Linear(self.model.classifier[1].in_features, 512),\n",
+        "            nn.BatchNorm1d(512),  # Batch Normalization added here\n",
+        "            nn.ReLU(),\n",
+        "            nn.Dropout(0.3),\n",
+        "            nn.Linear(512, num_classes),\n",
+        "            nn.BatchNorm1d(num_classes),  # Batch Normalization added here\n",
+        "        )\n",
+        "\n",
+        "    def forward(self, x):\n",
+        "        return self.model(x)\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "#################################\n",
+        "# CoCa\n",
+        "#################################\n",
+        "class DateClassifier(nn.Module):\n",
+        "    def __init__(self, num_classes=7 , pretrained=True):\n",
+        "        super(DateClassifier, self).__init__()\n",
+        "        self.model = coca(pretrained=pretrained)  # Assuming 'coca' function/class exists\n",
+        "        # Get the number of in_features for the classifier head\n",
+        "        in_features = self.model.classifier[1].in_features  # Adjust based on CoCa's structure if needed\n",
+        "        self.model.classifier = nn.Sequential(\n",
+        "            nn.Linear(in_features, 512),\n",
+        "            nn.BatchNorm1d(512),\n",
+        "            nn.ReLU(),\n",
+        "            nn.Dropout(0.3),\n",
+        "            nn.Linear(512, num_classes),\n",
+        "            nn.BatchNorm1d(num_classes),\n",
+        "        )\n",
+        "\n",
+        "    def forward(self, x):\n",
+        "        return self.model(x)"
+      ],
+      "metadata": {
+        "id": "NeOVsqGuGhHB"
+      }
+    },
+    {
+      "cell_type": "code",
+      "execution_count": 9,
+      "metadata": {
+        "id": "QgH2f_mS05JL"
+      },
+      "outputs": [],
+      "source": [
+        "#################################\n",
+        "# 6. TRAINING FUNCTION\n",
+        "#################################\n",
+        "def train_fn(train_loader, model, criterion, optimizer, scheduler):\n",
+        "    model.train()\n",
+        "    total_loss = 0.0\n",
+        "    correct = 0\n",
+        "    total = 0\n",
+        "\n",
+        "    for images, labels in tqdm(train_loader):\n",
+        "        images, labels = images.to(CFG.device), labels.to(CFG.device)\n",
+        "\n",
+        "        optimizer.zero_grad()\n",
+        "        outputs = model(images)\n",
+        "        loss = criterion(outputs, labels)\n",
+        "        loss.backward()\n",
+        "        optimizer.step()\n",
+        "        scheduler.step()\n",
+        "\n",
+        "        total_loss += loss.item()\n",
+        "        _, preds = torch.max(outputs, 1)\n",
+        "        correct += (preds == labels).sum().item()\n",
+        "        total += labels.size(0)\n",
+        "\n",
+        "    train_acc = correct / total\n",
+        "    return total_loss / len(train_loader), train_acc"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": 10,
+      "metadata": {
+        "id": "7Uf49_ly1enT"
+      },
+      "outputs": [],
+      "source": [
+        "#################################\n",
+        "# 7. VALIDATION FUNCTION\n",
+        "#################################\n",
+        "def validate_fn(valid_loader, model, criterion):\n",
+        "    model.eval()\n",
+        "    total_loss = 0.0\n",
+        "    correct = 0\n",
+        "    total = 0\n",
+        "    all_preds, all_labels = [], []\n",
+        "\n",
+        "    with torch.no_grad():\n",
+        "        for images, labels in tqdm(valid_loader):\n",
+        "            images, labels = images.to(CFG.device), labels.to(CFG.device)\n",
+        "            outputs = model(images)\n",
+        "            loss = criterion(outputs, labels)\n",
+        "            total_loss += loss.item()\n",
+        "\n",
+        "            _, preds = torch.max(outputs, 1)\n",
+        "            correct += (preds == labels).sum().item()\n",
+        "            total += labels.size(0)\n",
+        "\n",
+        "            all_preds.extend(preds.cpu().numpy())\n",
+        "            all_labels.extend(labels.cpu().numpy())\n",
+        "\n",
+        "    val_acc = correct / total\n",
+        "    val_f1 = f1_score(all_labels, all_preds, average='weighted')\n",
+        "    return total_loss / len(valid_loader), val_acc, val_f1\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "UKUUubgS1XUi"
+      },
+      "source": [
+        "from torchvision.models import efficientnet_b0, EfficientNet_B0_Weights\n",
+        "\n",
+        "def get_model(num_classes=7, pretrained=True):\n",
+        "    if pretrained:\n",
+        "        weights = EfficientNet_B0_Weights.IMAGENET1K_V1  # Pretrained weights\n",
+        "    else:\n",
+        "        weights = None  # No pretrained weights\n",
+        "\n",
+        "    model = efficientnet_b0(weights=weights)\n",
+        "    in_features = model.classifier[1].in_features\n",
+        "    model.classifier[1] = nn.Linear(in_features, num_classes)\n",
+        "    return model\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": 10,
+      "metadata": {
+        "id": "RdLm9ifRPlOL"
+      },
+      "outputs": [],
+      "source": []
+    },
+    {
+      "cell_type": "code",
+      "execution_count": 11,
+      "metadata": {
+        "id": "haxbLyrfLgXz"
+      },
+      "outputs": [],
+      "source": [
+        "#################################\n",
+        "# 7. TRAIN & VALID FUNCTIONS\n",
+        "#################################\n",
+        "def train_one_epoch(model, optimizer, dataloader, device, criterion):\n",
+        "    model.train()\n",
+        "    total_loss = 0\n",
+        "    for imgs, labels in tqdm(dataloader, desc=\"Training\", leave=False):\n",
+        "        imgs, labels = imgs.to(device), labels.to(device)\n",
+        "\n",
+        "        optimizer.zero_grad()\n",
+        "        outputs = model(imgs)\n",
+        "        loss = criterion(outputs, labels)\n",
+        "        loss.backward()\n",
+        "        optimizer.step()\n",
+        "\n",
+        "        total_loss += loss.item() * imgs.size(0)\n",
+        "\n",
+        "    epoch_loss = total_loss / len(dataloader.dataset)\n",
+        "    return epoch_loss\n",
+        "\n",
+        "def valid_one_epoch(model, dataloader, device, criterion):\n",
+        "    model.eval()\n",
+        "    total_loss = 0\n",
+        "    correct = 0\n",
+        "    total = 0\n",
+        "\n",
+        "    with torch.no_grad():\n",
+        "        for imgs, labels in tqdm(dataloader, desc=\"Validating\", leave=False):\n",
+        "            imgs, labels = imgs.to(device), labels.to(device)\n",
+        "            outputs = model(imgs)\n",
+        "\n",
+        "            loss = criterion(outputs, labels)\n",
+        "            total_loss += loss.item() * imgs.size(0)\n",
+        "\n",
+        "            preds = outputs.argmax(dim=1)\n",
+        "            correct += (preds == labels).sum().item()\n",
+        "            total += labels.size(0)\n",
+        "\n",
+        "    epoch_loss = total_loss / len(dataloader.dataset)\n",
+        "    accuracy = correct / total\n",
+        "    return epoch_loss, accuracy"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "collapsed": true,
+        "id": "dGnOHaRB2SoQ",
+        "outputId": "0efb0fbf-fe2a-48fe-94b6-7463abd1dd51"
+      },
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Training Fold 1/2\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "/usr/local/lib/python3.11/dist-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.\n",
+            "  warnings.warn(\n",
+            "/usr/local/lib/python3.11/dist-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=EfficientNet_B0_Weights.IMAGENET1K_V1`. You can also use `weights=EfficientNet_B0_Weights.DEFAULT` to get the most up-to-date weights.\n",
+            "  warnings.warn(msg)\n",
+            "Downloading: \"https://download.pytorch.org/models/efficientnet_b0_rwightman-7f5810bc.pth\" to /root/.cache/torch/hub/checkpoints/efficientnet_b0_rwightman-7f5810bc.pth\n",
+            "100%|██████████| 20.5M/20.5M [00:00<00:00, 51.5MB/s]\n",
+            "100%|██████████| 7/7 [02:04<00:00, 17.82s/it]\n",
+            "100%|██████████| 10/10 [01:50<00:00, 11.04s/it]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Epoch 1: Train Loss: 2.1213, Train Acc: 0.1759 | Val Loss: 1.9063, Val Acc: 0.2500, Val F1: 0.1983\n",
+            "Saved best model!\n",
+            "  --> Model saved to effb0_fold_0.pth\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "100%|██████████| 7/7 [00:30<00:00,  4.41s/it]\n",
+            "100%|██████████| 10/10 [00:27<00:00,  2.75s/it]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Epoch 2: Train Loss: 1.8820, Train Acc: 0.2917 | Val Loss: 1.7679, Val Acc: 0.3889, Val F1: 0.3585\n",
+            "Saved best model!\n",
+            "  --> Model saved to effb0_fold_0.pth\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "100%|██████████| 7/7 [00:29<00:00,  4.22s/it]\n",
+            "100%|██████████| 10/10 [00:31<00:00,  3.13s/it]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Epoch 3: Train Loss: 1.6366, Train Acc: 0.3981 | Val Loss: 1.6352, Val Acc: 0.4815, Val F1: 0.4400\n",
+            "Saved best model!\n",
+            "  --> Model saved to effb0_fold_0.pth\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "100%|██████████| 7/7 [00:31<00:00,  4.47s/it]\n",
+            "100%|██████████| 10/10 [00:26<00:00,  2.66s/it]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Epoch 4: Train Loss: 1.5129, Train Acc: 0.4537 | Val Loss: 1.4709, Val Acc: 0.5972, Val F1: 0.5642\n",
+            "Saved best model!\n",
+            "  --> Model saved to effb0_fold_0.pth\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "100%|██████████| 7/7 [00:30<00:00,  4.31s/it]\n",
+            "100%|██████████| 10/10 [00:26<00:00,  2.68s/it]\n",
+            "/usr/local/lib/python3.11/dist-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.\n",
+            "  warnings.warn(\n",
+            "/usr/local/lib/python3.11/dist-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=EfficientNet_B0_Weights.IMAGENET1K_V1`. You can also use `weights=EfficientNet_B0_Weights.DEFAULT` to get the most up-to-date weights.\n",
+            "  warnings.warn(msg)\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Epoch 5: Train Loss: 1.2534, Train Acc: 0.5833 | Val Loss: 1.3215, Val Acc: 0.6019, Val F1: 0.5514\n",
+            "Fold 0 best accuracy: 0.5642\n",
+            "\n",
+            "Training Fold 2/2\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            "100%|██████████| 7/7 [00:30<00:00,  4.31s/it]\n",
+            "100%|██████████| 10/10 [00:24<00:00,  2.44s/it]\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Epoch 1: Train Loss: 2.2733, Train Acc: 0.1667 | Val Loss: 1.9188, Val Acc: 0.2500, Val F1: 0.1788\n",
+            "Saved best model!\n",
+            "  --> Model saved to effb0_fold_1.pth\n"
+          ]
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": [
+            " 29%|██▊       | 2/7 [00:10<00:21,  4.38s/it]"
+          ]
+        }
+      ],
+      "source": [
+        "#################################\n",
+        "# 8. TRAINING LOOP\n",
+        "#################################\n",
+        "for fold in range(CFG.n_splits):\n",
+        "    print(f\"Training Fold {fold+1}/{CFG.n_splits}\")\n",
+        "\n",
+        "    train_data = train_df[train_df.fold != fold]\n",
+        "    valid_data = train_df[train_df.fold == fold]\n",
+        "\n",
+        "    train_dataset = DatesDataset(train_data, transforms=train_transform)\n",
+        "    valid_dataset = DatesDataset(valid_data, transforms=valid_transform)\n",
+        "\n",
+        "    train_loader = DataLoader(train_dataset, batch_size=CFG.train_bs, shuffle=True, num_workers=CFG.num_workers)\n",
+        "    valid_loader = DataLoader(valid_dataset, batch_size=CFG.valid_bs, shuffle=False, num_workers=CFG.num_workers)\n",
+        "\n",
+        "    model = DateClassifier().to(CFG.device)\n",
+        "\n",
+        "    criterion = nn.CrossEntropyLoss()\n",
+        "    optimizer = torch.optim.SGD(model.parameters(), lr=CFG.lr, momentum=0.9, weight_decay=1e-4)\n",
+        "    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=CFG.epochs)\n",
+        "\n",
+        "    best_f1 = 0\n",
+        "    for epoch in range(CFG.epochs):\n",
+        "\n",
+        "        train_loss, train_acc = train_fn(train_loader, model, criterion, optimizer, scheduler)\n",
+        "        val_loss, val_acc, val_f1 = validate_fn(valid_loader, model, criterion)\n",
+        "\n",
+        "        print(f\"Epoch {epoch+1}: Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f} | Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}, Val F1: {val_f1:.4f}\")\n",
+        "\n",
+        "        if val_f1 > best_f1:\n",
+        "            best_f1 = val_f1\n",
+        "            save_path = f\"effb0_fold_{fold}.pth\"\n",
+        "            print(\"Saved best model!\")\n",
+        "            torch.save(model.state_dict(), save_path)\n",
+        "            print(f\"  --> Model saved to {save_path}\")\n",
+        "\n",
+        "    print(f\"Fold {fold} best accuracy: {best_f1:.4f}\\n\")\n",
+        "\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "h6QY52QLxc6a"
+      },
+      "source": [
+        "#################################\n",
+        "# 8. K-FOLD TRAINING LOOP\n",
+        "#################################\n",
+        "def run_training(fold):\n",
+        "    print(f\"========== Fold: {fold} ==========\")\n",
+        "\n",
+        "    # Split\n",
+        "    train_data = train_df[train_df[\"fold\"] != fold].reset_index(drop=True)\n",
+        "    valid_data = train_df[train_df[\"fold\"] == fold].reset_index(drop=True)\n",
+        "\n",
+        "    # Datasets\n",
+        "    train_dataset = DatesDataset(train_data, mode=\"train\", transforms=train_transforms)\n",
+        "    valid_dataset = DatesDataset(valid_data, mode=\"valid\", transforms=valid_transforms)\n",
+        "\n",
+        "    # Loaders\n",
+        "    train_loader = DataLoader(train_dataset, batch_size=CFG.train_bs,\n",
+        "                              shuffle=True, num_workers=CFG.num_workers)\n",
+        "    valid_loader = DataLoader(valid_dataset, batch_size=CFG.valid_bs,\n",
+        "                              shuffle=False, num_workers=CFG.num_workers)\n",
+        "\n",
+        "    # Model, Optimizer, Loss\n",
+        "    model = get_model(num_classes=len(label_mapping), pretrained=True)\n",
+        "    model.to(CFG.device)\n",
+        "\n",
+        "    criterion = nn.CrossEntropyLoss()\n",
+        "    optimizer = torch.optim.Adam(model.parameters(), lr=CFG.lr)\n",
+        "\n",
+        "    best_acc = 0.0\n",
+        "    for epoch in range(CFG.epochs):\n",
+        "        print(f\"Fold {fold} | Epoch {epoch+1}/{CFG.epochs}\")\n",
+        "        \n",
+        "        train_loss = train_one_epoch(model, optimizer, train_loader, CFG.device, criterion)\n",
+        "        valid_loss, valid_acc = valid_one_epoch(model, valid_loader, CFG.device, criterion)\n",
+        "\n",
+        "        print(f\"  [Train Loss: {train_loss:.4f}]  [Valid Loss: {valid_loss:.4f}]  [Valid Acc: {valid_acc:.4f}]\")\n",
+        "\n",
+        "        # Save best model\n",
+        "        if valid_acc > best_acc:\n",
+        "            best_acc = valid_acc\n",
+        "            save_path = f\"effb0_fold_{fold}.pth\"\n",
+        "            torch.save(model.state_dict(), save_path)\n",
+        "            print(f\"  --> Model saved to {save_path}\")\n",
+        "    \n",
+        "    print(f\"Fold {fold} best accuracy: {best_acc:.4f}\\n\")"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "id": "QDK1I0MWLi1j"
+      },
+      "outputs": [],
+      "source": []
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "collapsed": true,
+        "id": "QAY-u1R8LlY6"
+      },
+      "outputs": [],
+      "source": [
+        "#for fold in range(CFG.n_splits):\n",
+        "#    run_training(fold)"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "id": "GxKp7T37Mkep"
+      },
+      "outputs": [],
+      "source": [
+        "#################################\n",
+        "# 10. INFERENCE & SUBMISSION\n",
+        "#################################\n",
+        "def inference_fn(model, dataloader, device):\n",
+        "    model.eval()\n",
+        "    preds = []\n",
+        "    with torch.no_grad():\n",
+        "        for imgs in tqdm(dataloader, desc=\"Inferring\", leave=False):\n",
+        "            imgs = imgs.to(device)\n",
+        "            outputs = model(imgs)\n",
+        "            # We'll use softmax for probabilities\n",
+        "            probabilities = torch.softmax(outputs, dim=1).cpu().numpy()\n",
+        "            preds.append(probabilities)\n",
+        "    return np.concatenate(preds, axis=0)\n",
+        "\n",
+        "def run_inference_on_test():\n",
+        "    # We prepare the test dataset\n",
+        "    test_dataset = DatesDataset(test_df, mode=\"test\", transforms=valid_transform)\n",
+        "    test_loader = DataLoader(test_dataset, batch_size=CFG.valid_bs,\n",
+        "                             shuffle=False, num_workers=CFG.num_workers)\n",
+        "\n",
+        "    # Load each fold's best model, do predictions for each, average all models predictions\n",
+        "    fold_preds = []\n",
+        "    for f_ in range(CFG.n_splits):\n",
+        "        model_path = f\"effb0_fold_{f_}.pth\"\n",
+        "        if not os.path.exists(model_path):\n",
+        "            print(f\"Warning: no model found at {model_path}, skipping this fold.\")\n",
+        "            continue\n",
+        "\n",
+        "        model = DateClassifier(num_classes=len(label_mapping), pretrained=False).to(CFG.device)\n",
+        "        model.load_state_dict(torch.load(model_path, map_location=CFG.device))\n",
+        "        model.to(CFG.device)\n",
+        "\n",
+        "        preds = inference_fn(model, test_loader, CFG.device)\n",
+        "        fold_preds.append(preds)\n",
+        "\n",
+        "        # cleanup\n",
+        "        del model\n",
+        "        gc.collect()\n",
+        "        torch.cuda.empty_cache()\n",
+        "\n",
+        "    # Average predictions across folds\n",
+        "    final_preds = np.mean(fold_preds, axis=0)  # shape = [len(test), #classes]\n",
+        "    class_indices = np.argmax(final_preds, axis=1)\n",
+        "\n",
+        "    inv_map = {v: k for k, v in label_mapping.items()}\n",
+        "    final_labels = [inv_map[i] for i in class_indices]\n",
+        "\n",
+        "    # Create submission\n",
+        "    submission = pd.DataFrame({\n",
+        "        \"filename\": test_df[\"path\"].apply(os.path.basename),\n",
+        "        \"label\": final_labels\n",
+        "    })\n",
+        "    submission.to_csv(\"submission.csv\", index=False)\n",
+        "    print(\"Saved submission.csv!\")\n",
+        "    print(submission.head())"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "id": "zAqLWDzKccm3"
+      },
+      "outputs": [],
+      "source": [
+        "run_inference_on_test()"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "id": "_NwNckpiCqde"
+      },
+      "outputs": [],
+      "source": [
+        "#################################\n",
+        "# 11. DISPLAY 10 RANDOM IAMGES\n",
+        "#################################\n",
+        "import matplotlib.pyplot as plt\n",
+        "import random\n",
+        "\n",
+        "# Assuming 'submission.csv' and image paths are correctly set up\n",
+        "submission_df = pd.read_csv(\"submission.csv\")\n",
+        "\n",
+        "# Randomly select 10 image indices\n",
+        "random_indices = random.sample(range(len(submission_df)), 10)\n",
+        "\n",
+        "plt.figure(figsize=(15, 10))  # Adjust figure size as needed\n",
+        "\n",
+        "for i, idx in enumerate(random_indices):\n",
+        "    image_path = os.path.join(\"/content/drive/MyDrive/open-data-day-2025-dates-types-classification/test\", submission_df.loc[idx, 'filename'])\n",
+        "    predicted_label = submission_df.loc[idx, 'label']\n",
+        "\n",
+        "    try:\n",
+        "        img = cv2.imread(image_path)\n",
+        "        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)\n",
+        "\n",
+        "        plt.subplot(2, 5, i + 1)  # Adjust subplot layout as needed\n",
+        "        plt.imshow(img)\n",
+        "        plt.title(f\"Predicted: {predicted_label}\")\n",
+        "        plt.axis('off')\n",
+        "\n",
+        "    except Exception as e:\n",
+        "        print(f\"Error loading or displaying image at {image_path}: {e}\")\n",
+        "        # Handle the error, e.g., display a placeholder image or skip the image\n",
+        "\n",
+        "\n",
+        "plt.tight_layout()\n",
+        "plt.show()\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "id": "KfqY_Xx4ca9N"
+      },
+      "outputs": [],
+      "source": [
+        "!pip install gradio"
+      ]
+    },
+    {
+      "source": [
+        "model = DateClassifier(num_classes=7)\n",
+        "model.load_state_dict(torch.load(\"/content/effb0_fold_1.pth\", map_location=\"cpu\"))\n",
+        "model.eval()"
+      ],
+      "cell_type": "code",
+      "metadata": {
+        "id": "BNvSDDgm3uR9"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "label_dict = {\n",
+        "    \"Ajwa\":        0,\n",
+        "    \"Medjool\":     1,\n",
+        "    \"Meneifi\":     2,\n",
+        "    \"Nabtat Ali\":  3,\n",
+        "    \"Shaishe\":     4,\n",
+        "    \"Sokari\":      5,\n",
+        "    \"Sugaey\":      6\n",
+        "}\n",
+        "\n",
+        "# === Preprocessing pipeline ===\n",
+        "transform = T.Compose([\n",
+        "    T.Resize((224, 224)),\n",
+        "    T.ToTensor(),\n",
+        "    T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])  # ImageNet normalization\n",
+        "])"
+      ],
+      "metadata": {
+        "id": "2ZP1Senl9Req"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "def predict(img):\n",
+        "    img = transform(img).unsqueeze(0)  # Add batch dimension\n",
+        "    with torch.no_grad():\n",
+        "        outputs = model(img)\n",
+        "        _, predicted = torch.max(outputs, 1)\n",
+        "        return class_names[predicted.item()]\n"
+      ],
+      "metadata": {
+        "id": "u8Us00OI4anL"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "import gradio as gr\n",
+        "gr.Interface(\n",
+        "    fn=predict,\n",
+        "    inputs=gr.Image(type=\"pil\"),\n",
+        "    outputs=\"label\",\n",
+        "    title=\"Date Fruit Classifier\",\n",
+        "    description=\"Upload an image of a date fruit to identify its type.\"\n",
+        ").launch()\n"
+      ],
+      "metadata": {
+        "id": "FZPuSs3t4ckI"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [],
+      "metadata": {
+        "id": "YjgtYqXW727e"
+      },
+      "execution_count": null,
+      "outputs": []
+    }
+  ],
+  "metadata": {
+    "accelerator": "GPU",
+    "colab": {
+      "gpuType": "T4",
+      "provenance": []
+    },
+    "kernelspec": {
+      "display_name": "Python 3",
+      "name": "python3"
+    },
+    "language_info": {
+      "name": "python"
+    }
+  },
+  "nbformat": 4,
+  "nbformat_minor": 0
+}
+name: Upload Python Package
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  release-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Build release distributions
+        run: |
+          # NOTE: put your own distribution build steps here.
+          python -m pip install build
+          python -m build
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dists
+          path: dist/
+
+  pypi-publish:
+    runs-on: ubuntu-latest
+    needs:
+      - release-build
+    permissions:
+      # IMPORTANT: this permission is mandatory for trusted publishing
+      id-token: write
+
+    # Dedicated environments with protections for publishing are strongly recommended.
+    # For more information, see: https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment#deployment-protection-rules
+    environment:
+      name: pypi
+      # OPTIONAL: uncomment and update to include your PyPI project URL in the deployment status:
+      # url: https://pypi.org/p/YOURPROJECT
+      #
+      # ALTERNATIVE: if your GitHub Release name is the PyPI project version string
+      # ALTERNATIVE: exactly, uncomment the following line instead:
+      # url: https://pypi.org/project/YOURPROJECT/${{ github.event.release.name }}
+
+    steps:
+      - name: Retrieve release distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dists
+          path: dist/
+
+      - name: Publish release distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
