@@ -97,3 +97,7 @@ This project is licensed under the MIT License.
 ---
 
 Enjoy classifying dates like a pro! 🌴🥇
+
+## 📘 Documentation
+
+- [How to Run (using pre-trained model)](./How_To_Run.md)
