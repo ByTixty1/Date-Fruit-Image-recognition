@@ -1,0 +1,35 @@
+#################################
+# 1. IMPORTS & CONFIG
+#################################
+!pip install gradio wikipedia
+!pip install kagglehub
+!pip install kaggle
+
+import os
+import gc
+import cv2
+import torch
+import random
+import numpy as np
+import pandas as pd
+
+from glob import glob
+from torch import nn
+from tqdm import tqdm
+from sklearn.model_selection import KFold
+from torch.utils.data import Dataset, DataLoader
+
+import torchvision
+import torchvision.transforms as T
+
+from google.colab import drive
+from sklearn.metrics import f1_score
+import torch.cuda.amp as amp
+
+
+
+import gradio as gr
+import wikipedia
+from PIL import Image
+import torch
+import torchvision.transforms as transforms
