@@ -6,7 +6,7 @@ This guide explains how to run the project **without training**, by using the pr
 
 ## 📥 1. Download the Pre-trained Model
 
-Download the `best_model.pth` `best_date_classifier_model.pth` file from the `saved_model/` folder in this repository:
+Download the `best_model1.pth` `best_date_classifier_model1.pth` file from the `saved_model/` folder in this repository:
 
 🔗 **[Download best\_model.pth](./saved_model/best_model.pth)**
 
