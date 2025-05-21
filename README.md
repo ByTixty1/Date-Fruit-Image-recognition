@@ -1,75 +1,83 @@
-# Date Fruit Classification with K-Fold Cross-Validation 🍇📊
+Date Fruit Classification with EfficientNet-B0
 
-This repository contains a deep learning project for classifying date fruit images using K-Fold Cross-Validation and transfer learning (EfficientNet-B0).
+This project is an AI-powered image classification model that identifies types of date fruits from images using EfficientNet-B0. Built in Python with PyTorch, the model is trained, evaluated, and served through a user-friendly Jupyter Notebook and an interactive Gradio demo.
 
-## 📁 Project Structure
+🚀 Features
 
-```
-├── Date_classification_K_fold.ipynb  # Main notebook with training code and results
-├── /dataset/                         # Directory to store training images (not included)
-├── /models/                          # Saved models (optional)
-├── requirements.txt                  # Python dependencies
-└── README.md                         # Project overview and usage
-```
+EfficientNet-B0-based CNN for high-accuracy image classification
 
-## 🚀 Features
+Automatic CSV generation of predictions
 
-- Uses **EfficientNet-B0** for high-performance image classification
-- Implements **K-Fold Cross-Validation** for robust evaluation
-- Evaluates performance using accuracy, confusion matrix, and classification report
-- Custom preprocessing pipeline with PyTorch and torchvision
+Easy-to-use Jupyter Notebook interface
 
-## 📦 Installation
+Live Gradio demo — try the model without training!
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/your-username/date-fruit-classification.git
-   cd date-fruit-classification
-   ```
+📂 Dataset Structure
 
-2. Create a virtual environment and install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+The dataset used in this project comes from Kaggle and is too large to be included directly in this repository. You can download it from the following link:
 
-3. Download and prepare your dataset inside the `/dataset/` directory.
+🔗 Date Fruit Image Dataset in Controlled Environment by Wadhasn Alhamdan
 
-## 🧠 How to Run
+Huge thanks to Wadhasn Alhamdan for providing this high-quality and well-structured dataset.
 
-Open the notebook in Jupyter or Colab:
+Once downloaded, make sure your local folder is structured like this:
 
-```bash
-jupyter notebook Date_classification_K_fold.ipynb
-```
+/dataset
+├── train_labels.csv
+├── images/
+│   ├── img_001.jpg
+│   ├── img_002.jpg
+│   └── ...
 
-Or directly in Google Colab by uploading the `.ipynb` file.
+⚙️ How to Run
 
-## 📝 Requirements
+1. Clone the Repository
 
-- Python 3.8+
-- PyTorch
-- torchvision
-- scikit-learn
-- matplotlib
-- numpy
-- pandas
+git clone https://github.com/your-username/date-fruit-classifier.git
+cd date-fruit-classifier
 
-## 📊 Results
+2. Install Dependencies
 
-The model achieves high classification accuracy on different date varieties across multiple folds. Full training logs and metrics are available in the notebook.
+pip install -r requirements.txt
 
-## 📸 Dataset
+3. Run the Notebook
 
-> Note: The dataset is not included due to size limitations. You can use your own dataset of labeled date fruit images.
+Open the notebook and run all cells to train, validate, and generate predictions.
 
-## 🤝 Contributing
+4. Or Skip Training and Try the Demo 😄
 
-Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
+Use the pre-trained model via the Gradio interface to test real images directly.
 
-## 📄 License
+📊 Output
 
-MIT License. See `LICENSE` for details.
+Model predictions are saved to a CSV file.
 
----
+Accuracy and loss graphs are generated during training.
 
-**Made with ❤️ for Date Fruit AI Research**
+Demo UI displays image and predicted class in real time.
+
+🔗 Live Demo
+
+Click here to try it out: [Insert Demo Link]
+
+🧠 Tech Stack
+
+Python
+
+PyTorch
+
+EfficientNet (Torchvision / timm)
+
+Pandas / NumPy / Matplotlib
+
+Gradio
+
+Jupyter Notebook
+
+👤 Author
+
+By Tixty1
+
+📄 License
+
+This project is licensed under the MIT License.
