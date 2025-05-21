@@ -1,7 +1,7 @@
 #################################
 # 1. IMPORTS & CONFIG
 #################################
-!pip install gradio wikipedia
+!pip install gradio wikipedia-api
 !pip install kagglehub
 !pip install kaggle
 
