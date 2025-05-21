@@ -1,6 +1,7 @@
 # Date Fruit Classification with EfficientNet-B0
 
 This project is an AI-powered image classification model that identifies types of date fruits from images using **EfficientNet-B0**. Built in Python with PyTorch, the model is trained, evaluated, and served through a user-friendly Jupyter Notebook and an interactive **Gradio** demo.
+
 Click here to try it out: **[Gradio Live Demo](https://92ab93e1cd78a3e69d.gradio.live/)**
 
 ---
