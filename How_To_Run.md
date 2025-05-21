@@ -9,7 +9,7 @@ This guide explains how to run the project **without training**, by using the pr
 Download the `best_model1.pth` `best_date_classifier_model1.pth` file from the `saved_model/` folder in this repository:
 
 🔗 **[Download best\_model.pth](./saved_model/best_model1.pth)**
-🔗 **[Download best\_model.pth](./best_date_classifier_model1.pth)**
+🔗 **[Download best\_best_date_classifier_model1.pth](./best_date_classifier_model1.pth)**
 
 Save this file in your project directory under:
 
